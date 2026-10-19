@@ -38,10 +38,11 @@ def kill_at(tmp_path, operation, boundary, **configuration):
                 message = ready.get(timeout=30)
             except queue.Empty:
                 message = "worker did not reach its boundary"
-            if message != "ready\n":
+            if not message.startswith("ready:"):
                 log.seek(0)
                 raise AssertionError(f"{message}: {log.read().decode(errors='replace')}")
-            worker.kill()
+            actual_pid = int(message.removeprefix("ready:"))
+            _kill(worker, actual_pid)
             worker.wait(timeout=10)
             if sys.platform != "win32":
                 assert worker.returncode == -signal.SIGKILL
@@ -49,8 +50,22 @@ def kill_at(tmp_path, operation, boundary, **configuration):
                 assert worker.returncode != 0  # TerminateProcess is Windows' hard kill.
         finally:
             if worker.poll() is None:
-                worker.kill()
+                _kill(worker)
                 worker.wait(timeout=10)
             reader.join(timeout=5)
             worker.stdin.close()
             worker.stdout.close()
+
+
+def _kill(worker, actual_pid=None):
+    if sys.platform == "win32":
+        # Kill the interpreter; its virtualenv launcher exits after waiting for it.
+        subprocess.run(
+            ["taskkill", "/PID", str(actual_pid or worker.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+    else:
+        worker.kill()
